@@ -2,7 +2,6 @@
 import base64
 import contextlib
 import logging
-import pprint
 import sys
 
 import grpc
@@ -67,7 +66,6 @@ def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncReques
 
 
 def process_response(response: psdbconnect.v1alpha1_pb2.SyncResponse):
-    pprint.pprint(response.cursor)
     for result in response.result:
         output = []
         i = 0
