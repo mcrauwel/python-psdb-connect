@@ -3,6 +3,7 @@ import base64
 import contextlib
 import logging
 import sys
+import _thread
 
 import grpc
 
@@ -51,7 +52,7 @@ def create_client_channel(address: str, username: str, password: str, port: int 
     yield channel
 
 
-def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncRequest):
+def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncRequest) -> psdbconnect.v1alpha1_pb2.TableCursor:
     stub = psdbconnect.v1alpha1_pb2_grpc.ConnectStub(channel)
 
     try:
@@ -62,19 +63,41 @@ def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncReques
     else:
         for response in responses:
             logging.debug("Received message: %s", response)
-            process_response(response)
+            _thread.start_new_thread(process_inserts, (response, ))
+            _thread.start_new_thread(process_updates, (response, ))
+            _thread.start_new_thread(process_deletes, (response, ))
+
+        return response.cursor
 
 
-def process_response(response: psdbconnect.v1alpha1_pb2.SyncResponse):
+def process_inserts(response: psdbconnect.v1alpha1_pb2.SyncResponse):
     for result in response.result:
-        output = []
-        i = 0
-        for field in result.fields:
-            for row in result.rows:
-                output.append(f"{field.name} = {get_row_value(row, i)}")
-                i += 1
+        output = print_row(result)
+        print("inserted row: " + ", ".join(output))
 
-        print("row: " + ", ".join(output))
+
+def process_updates(response: psdbconnect.v1alpha1_pb2.SyncResponse):
+    for result in response.updates:
+        output = print_row(result.before)
+        print("updated before row: " + ", ".join(output))
+        output = print_row(result.after)
+        print("updated after row: " + ", ".join(output))
+
+
+def process_deletes(response: psdbconnect.v1alpha1_pb2.SyncResponse):
+    for result in response.deletes:
+        output = print_row(result.result)
+        print("deleted row: " + ", ".join(output))
+
+
+def print_row(result: vitess.query_pb2.QueryResult):
+    output = []
+    i = 0
+    for field in result.fields:
+        for row in result.rows:
+            output.append(f"{field.name} = {get_row_value(row, i)}")
+            i += 1
+    return output
 
 
 def get_row_value(row: vitess.query_pb2.Row, field_num: int):
@@ -100,10 +123,14 @@ def run(username: str, password: str, keyspace: str, shard: str = "", last_posit
         columns=["id", "k", "c"],
         tablet_type=psdbconnect.v1alpha1_pb2.TabletType.replica,
         cursor=cursor,
+        include_inserts=True,
+        include_updates=True,
+        include_deletes=True,
     )
 
     with create_client_channel("aws.connect.psdb.cloud", username, password) as channel:
-        send_rpc(channel, request)
+        last_cursor = send_rpc(channel, request)
+        print(last_cursor)
 
 
 if __name__ == "__main__":
