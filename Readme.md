@@ -5,7 +5,7 @@ This is merely an example and does not come with any guarantees whatsoever.
 
 The protobuf files used in this example can be found [here](https://buf.build/planetscale)
 
-## How yo use it
+## How you use it
 
 This tool requires Python 3 to run.
 
