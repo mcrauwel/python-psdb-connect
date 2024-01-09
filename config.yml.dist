@@ -1,0 +1,18 @@
+---
+credentials:
+  username: ""
+  password: ""
+
+connection:
+  hostname: "aws.connect.psdb.cloud"
+  port: 443
+  keyspace: ""
+
+tables:
+  - name: "sbtest1"
+    columns: ["id"]
+
+settings:
+  include_inserts: true
+  include_updates: true
+  include_deletes: true
