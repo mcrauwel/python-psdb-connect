@@ -3,6 +3,7 @@ import base64
 import contextlib
 import logging
 import sys
+import signal
 import _thread
 
 import grpc
@@ -12,6 +13,7 @@ import psdbconnect.v1alpha1_pb2_grpc
 import vitess.query_pb2
 
 _AUTHORIZATION_HEADER_KEY = "authorization"
+LAST_CURSOR: psdbconnect.v1alpha1_pb2.TableCursor = None
 
 
 class BasicAuthMetadataPlugin(grpc.AuthMetadataPlugin):
@@ -62,18 +64,30 @@ def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncReques
         return rpc_error
     else:
         for response in responses:
-            logging.debug("Received message: %s", response)
-            _thread.start_new_thread(process_inserts, (response, ))
-            _thread.start_new_thread(process_updates, (response, ))
-            _thread.start_new_thread(process_deletes, (response, ))
+            try:
+                logging.debug("Received message: %s", response)
+                _thread.start_new_thread(process_inserts, (response, ))
+                _thread.start_new_thread(process_updates, (response, ))
+                _thread.start_new_thread(process_deletes, (response, ))
+
+            except grpc.RpcError as rpc_error:
+                logging.error("Received message: %s", rpc_error)
+                return response.cursor
 
         return response.cursor
+
+
+def process_cursor(cursor: psdbconnect.v1alpha1_pb2.TableCursor):
+    global LAST_CURSOR
+    LAST_CURSOR = cursor
+    print(f"cursor: shard={cursor.shard}, keyspace={cursor.keyspace}, position={cursor.position}, lastKnownPK={cursor.last_known_pk}")
 
 
 def process_inserts(response: psdbconnect.v1alpha1_pb2.SyncResponse):
     for result in response.result:
         output = print_row(result)
         print("inserted row: " + ", ".join(output))
+        process_cursor(response.cursor)
 
 
 def process_updates(response: psdbconnect.v1alpha1_pb2.SyncResponse):
@@ -82,12 +96,14 @@ def process_updates(response: psdbconnect.v1alpha1_pb2.SyncResponse):
         print("updated before row: " + ", ".join(output))
         output = print_row(result.after)
         print("updated after row: " + ", ".join(output))
+        process_cursor(response.cursor)
 
 
 def process_deletes(response: psdbconnect.v1alpha1_pb2.SyncResponse):
     for result in response.deletes:
         output = print_row(result.result)
         print("deleted row: " + ", ".join(output))
+        process_cursor(response.cursor)
 
 
 def print_row(result: vitess.query_pb2.QueryResult):
@@ -130,11 +146,18 @@ def run(username: str, password: str, keyspace: str, shard: str = "", last_posit
 
     with create_client_channel("aws.connect.psdb.cloud", username, password) as channel:
         last_cursor = send_rpc(channel, request)
-        print(last_cursor)
+        process_cursor(last_cursor)
+
+
+def signal_handler(sig, frame):
+    print('You pressed Ctrl+C!, stopping. Here is your final cursor:')
+    process_cursor(LAST_CURSOR)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    signal.signal(signal.SIGINT, signal_handler)
 
     if len(sys.argv) < 4:
         print(f"Usage: {sys.argv[0]} <username> <password> <keyspace> [shard] [position]")
