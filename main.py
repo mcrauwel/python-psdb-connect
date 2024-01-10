@@ -92,7 +92,7 @@ def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncReques
 def process_cursor(cursor: psdbconnect.v1alpha1_pb2.TableCursor):
     global LAST_CURSOR
     LAST_CURSOR = cursor
-    print(f"cursor: shard={cursor.shard}, keyspace={cursor.keyspace}, position={cursor.position}")
+    logging.debug(f"cursor: shard={cursor.shard}, keyspace={cursor.keyspace}, position={cursor.position}")
 
 
 def process_inserts(response: psdbconnect.v1alpha1_pb2.SyncResponse):
@@ -201,7 +201,7 @@ if __name__ == "__main__":
 
     with open(args.config, 'r') as file:
         config = yaml.safe_load(file)
-        print(config)
+        # print(config)
 
         if not config['credentials']:
             print("Error: no credentials specified")
@@ -253,6 +253,7 @@ if __name__ == "__main__":
             exit(-1)
 
         processes = list()
+        logging.info("Starting...")
         for table in config['tables']:
             logging.info(f"Starting for table {table['name']}")
             proc = multiprocessing.Process(target=run, args=(
