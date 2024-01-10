@@ -57,7 +57,7 @@ def create_client_channel(address: str, username: str, password: str, port: int 
     yield channel
 
 
-def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncRequest) \
+def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncRequest, loglevel: int = logging.INFO) \
         -> psdbconnect.v1alpha1_pb2.TableCursor:
     stub = psdbconnect.v1alpha1_pb2_grpc.ConnectStub(channel)
 
@@ -71,9 +71,9 @@ def send_rpc(channel: grpc.Channel, request: psdbconnect.v1alpha1_pb2.SyncReques
             for response in responses:
                 try:
                     logging.debug("Received message: %s", response)
-                    threading.Thread(target=process_inserts, args=(response, )).start()
-                    threading.Thread(target=process_updates, args=(response, )).start()
-                    threading.Thread(target=process_deletes, args=(response, )).start()
+                    threading.Thread(target=process_inserts, args=(response, loglevel, )).start()
+                    threading.Thread(target=process_updates, args=(response, loglevel, )).start()
+                    threading.Thread(target=process_deletes, args=(response, loglevel, )).start()
 
                 except grpc.RpcError as rpc_error:
                     logging.error("Received message: %s", rpc_error)
@@ -95,14 +95,16 @@ def process_cursor(cursor: psdbconnect.v1alpha1_pb2.TableCursor):
     logging.debug(f"cursor: shard={cursor.shard}, keyspace={cursor.keyspace}, position={cursor.position}")
 
 
-def process_inserts(response: psdbconnect.v1alpha1_pb2.SyncResponse):
+def process_inserts(response: psdbconnect.v1alpha1_pb2.SyncResponse, loglevel: int = logging.INFO):
+    logging.basicConfig(level=loglevel)
     for result in response.result:
         output = print_row(result)
         print("inserted row: " + ", ".join(output))
         process_cursor(response.cursor)
 
 
-def process_updates(response: psdbconnect.v1alpha1_pb2.SyncResponse):
+def process_updates(response: psdbconnect.v1alpha1_pb2.SyncResponse, loglevel: int = logging.INFO):
+    logging.basicConfig(level=loglevel)
     for result in response.updates:
         output = print_row(result.before)
         print("updated before row: " + ", ".join(output))
@@ -111,7 +113,8 @@ def process_updates(response: psdbconnect.v1alpha1_pb2.SyncResponse):
         process_cursor(response.cursor)
 
 
-def process_deletes(response: psdbconnect.v1alpha1_pb2.SyncResponse):
+def process_deletes(response: psdbconnect.v1alpha1_pb2.SyncResponse, loglevel: int = logging.INFO):
+    logging.basicConfig(level=loglevel)
     for result in response.deletes:
         output = print_row(result.result)
         print("deleted row: " + ", ".join(output))
@@ -123,7 +126,7 @@ def print_row(result: vitess.query_pb2.QueryResult):
     i = 0
     for field in result.fields:
         if i == 0:
-            output.append(f"`{field.database}`.`{field.table}` ")
+            output.append(f"`{field.database}`.`{field.table}`")
         for row in result.rows:
             output.append(f"{field.name} = {get_row_value(row, i)}")
             i += 1
@@ -142,12 +145,13 @@ def get_row_value(row: vitess.query_pb2.Row, field_num: int):
 
 
 def run(connection, username: str, password: str, keyspace: str, table_name: str, columns=[], settings=[],
-        shard: str = "", last_position: str = ""):
+        shard: str = "", last_position: str = "", loglevel: int = logging.INFO):
     cursor = psdbconnect.v1alpha1_pb2.TableCursor(
         keyspace=keyspace,
         shard=shard,
         position=last_position
     )
+    logging.basicConfig(level=loglevel)
 
     request = psdbconnect.v1alpha1_pb2.SyncRequest(
         table_name=table_name,
@@ -160,7 +164,7 @@ def run(connection, username: str, password: str, keyspace: str, table_name: str
     )
 
     with create_client_channel(connection['hostname'], username, password, connection['port']) as channel:
-        last_cursor = send_rpc(channel, request)
+        last_cursor = send_rpc(channel, request, loglevel)
         process_cursor(last_cursor)
 
 
@@ -174,7 +178,7 @@ def signal_handler(sig, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     parser = argparse.ArgumentParser(
-        prog="PythonPsdbConnect",
+        prog="./main.py",
         description="Example program for connecting to a PlanetScale Database using PlanetScale Connect.",
         epilog="This is just an example, no guarantees are provided",
     )
@@ -185,8 +189,10 @@ if __name__ == "__main__":
                         choices=["info", "warning", "error", "debug"],
                         dest="loglevel"
                         )
-    parser.add_argument("shard", nargs="?")
-    parser.add_argument("position", nargs="?")
+    parser.add_argument("shard", nargs="?", help="(optional) the shard you want to query")
+    parser.add_argument("position", nargs="?", help="(optional) the GTID position to start streaming from "
+                                                    "(if you apecify this you need to specify the shard that "
+                                                    "corresponds with this GTID)")
     args = parser.parse_args()
     # print(args)
 
@@ -198,6 +204,8 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.ERROR)
     elif args.loglevel == "debug":
         logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
 
     with open(args.config, 'r') as file:
         config = yaml.safe_load(file)
@@ -266,6 +274,7 @@ if __name__ == "__main__":
                 config['settings'],
                 args.shard,
                 args.position,
+                logging.getLogger().getEffectiveLevel()
             ))
             proc.start()
             processes.append(proc)
@@ -274,4 +283,3 @@ if __name__ == "__main__":
             proc.join()
 
         logging.info("All done!")
-
